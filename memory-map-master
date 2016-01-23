@@ -1,0 +1,30 @@
+addr - 2byte hex
+Nbytes - 1byte/2byte hex
+what - desc of mem field
+
+------------------------------------------------------------------
+EEPROM	- NOT IMPLEMENTED
+addr		Nbytes		what
+0000		10			signiture
+0010		01			max number of drives (MaxDRV)
+
+------------------------------------------------------------------
+SRAM		offset - 0100
+addr		Nbytes		what
+0000		01			Number of drives (0..MaxDRV @ EEPROM)
+0001		02			Drive0 commands number
+0003		02			Drive1 commands number
+0005		02			Drive2 commands number
+0007		02			Drive3 commands number
+0009		02			Drive0 current command index
+000b		02			Drive1 current command index
+000d		02			Drive2 current command index
+000f		02			Drive3 current command index
+0011	till	RAMEND		STACK
+
+------------------------------------------------------------------
+external RAM
+addr		Nbytes		what
+0x00		0x00			commands for drive number (x/k). k - size of commands page. x - zero-based number.
+			e.g. for page-size k=0100 ==> 0200 - is page start for commands of third (2+1, 'cause zero-based enumeration) drive.
+

@@ -1,0 +1,64 @@
+4 двигателя.
+Команда - SPI - оптимум fSPI = fosc/4 - частота передачи данных по SPI
+	1 бит - направление (CW/#CCW)
+	1 бит - шаг/#полушаг
+	6 бит - кол-во шагов	(max - 63)
+ИТОГО - 1 команда занимеат ровно один байт.
+* ВОПРОС - сколько нужно памяти?
+В памяти - цикл команд для каждого двигателя + инфа.
+	* ВОПРОС - Предел длины цикла
+	Примем - 256b на каждый двигатель -> 1 kibi (4 drives) + some extra RAM for info. we can use internal MCU SRAM for info.
+	INFO - Ndrives - 1byte(?), number of commands - 1byte for each drive.
+		INFO file arrangement
+			1byte - Ndrives (val = 0x00..0x04)
+			1byte - Kcom for drive 0
+			1byte - Kcom for drive 1
+			1byte - Kcom for drive 2
+			1byte - Kcom for drive 3
+
+			Ndrives - byte arrangement
+			MSB	LSB
+			xxxxxx**
+			* - useful info (2 bits - 4 variations - 4 drives)
+			x - currently not used
+
+При fosc = 8MHz
+	8 бит от КСШД до ККШД дойдут за ((1/8M)/4)*8 = 0.25 usec
+	8 бит от RAM до КСШД дойдут за ((1/8M)/4)*8 = 0.25 usec
+	На примере DS1200 -
+		24 управляющих бита от КСШД до RAM дойдут за 0.75 usec
+	Смену CrystalSelect принимаем равной нулю по времени и загрузку инфы в/из SPI Data register также ситаем равной нулю по времени.
+	ИТОГО - Trot = (0.25+0.75+0.25) * 4 usec - период выполнения проворота (на всех двигателях одновременно)
+			Trot = 6 usec
+	При команде x1111111 получим 65 шагов за 6 usec = 10.83MHz (шагов в секунду) - максимальная частота шагов, позволяемая при таких условиях. При шаге = 1.8 градуса это составит 54166,67 оборотов в секунду.
+	Неплохая перспектива.
+
+Плдтверждение того, что дочерний МК успеет выполнить даже 63 такта за время передачи данных до остальных МК
+1 drive cycle - 235 clocks
+4 drives cycle - 4*235 = 940 clocks.
+1 slave MCU has to do at most 63 flips of 14 clocks each = 882 clocks. 940 clocks seems to be enough ;-)
+; MAX freqs :
+	Fstep = 63 steps each [235 clocks = 0.029375 msec ] = 63/0.029375m = 2144680 steps/sec
+	Fangle = Fstep * stepSize = 2144680 steps/sec * 1.8grads/step = 3860424 grads/sec
+	Frot = Fangle / 360 grads/rot = 3860424 grads/sec / 360 grads/rot = 10723.4 rots/sec
+; MIN freqs
+	Fstep = 1 step each [full commands cycle = 1024 commands = 235*1024*4 clocks = 962560 clocks = 0.12032 sec]
+		 = 1 / 0.12032 = 8 steps/sec
+	Fangle = Fstep * stepSize = 8 * 1.8 = 14.4 grads/sec
+	Frot = Fangle / 360 grads/rot = 14.4/360 = 0.04 rots/sec
+
+
+Скелет в первом приближении
+--- общение по uart + запись в RAM по SPI
+--- изъятие из RAM по SPI + передача на ККШД по SPI
+Может возьмем atmega 8 (есть SPI +USART/UART) - 8k flash, 1k sram, 512bytes
+
+----------- масштабирование времени -------------
+54 такта команд в цикле на каждый двигатель
+3*8*4 тактов - передача на память
+1*8*4 тактов - передача от памяти
+1*8*4 тактов - передача на ведомого
+
+Сумма - 54 + 3*8*4 + 1*8*4 + 1*8*4 = 214 такт
+мы будем выполнять TimeScale раз по 214 тактов впустую для масштабирования времени
+

@@ -1,0 +1,265 @@
+; maximum Number of drives that could be controlled
+.def MAX_NDRIVES_GLOBAL = 0x04
+; maximum number of comands per drive (in pages)
+.def MAX_NUM_COM_DRV = 0x01
+; size of drive comand
+.def DR_COM_SZ = 0x01
+
+.def temp = r17
+.def temp2 = r15
+.def dataTemp = r16
+.def temp3 = r14
+
+; just for drives number and comands r/w
+.def CurComNum = r14
+.def CurDrvNum = r17
+.def CurDrvComNum = r18
+.def Ndrv = r15
+.def MAX_NUM_COM_DRV = 0x0100
+.def DrvComNum = r13
+.def RAMaddrH = r25
+.def RAMaddrL = r24
+.def temp_com = r20
+.def coms_pages = r19
+
+.def tempBaudRateH = r17
+.def tempBaudRateL = r16
+.def DDR_SPI = DDRB
+.def DD_SCK = DDB5
+.def DD_MISO = DDB4
+.def DD_MOSI = DDB3
+
+; Memory read/write data and read/write status register commands
+.def RAM_RDSR = 0b00000101
+.def RAM_WRSR = 0b00000001
+.def RAM_READ = 0b00000011
+.def RAM_WRTE = 0b00000010
+
+; uart baudrate coeff
+.def uart_baudrate_h = 0b00000000
+.def uart_baudrate_l = 0b00110011
+
+; uart data start byte from PC
+.def UartDataStartByte = 0b11001001
+; uart ack for data start
+.def UartDataStartAck = 0b00110110
+; uart continue byte
+.def UartContByte = 0b01101101
+
+; enable byte operation mode without a HOLD functionality
+.def RAM_SB_byte_oper = 0b00000011
+
+; #MemorySelect pin number 0 @ port B
+; #MemorySelect
+.def MemSelPort = PORTB
+.def MemSelBit = PORTB0
+
+; Status leds
+.def StatusReadyPort = PORTD
+.def StatusConfigDone = PORTD7
+.def StatusUartTxRx = PORTD6
+.def StatusSpiTxRx = PORTD5
+
+; SRAM offset
+.def SRAMoffset = 0x0100
+.def NdrivesOff = 0x0000
+.def NdrivesSz = 0x0001
+.def DrComNumSz = 0x0001
+
+; ----------- PROCS ------------
+; configure ports
+; In - NONE
+; Out - NONE
+----- TODO -----
+ConfigPorts:
+	ret
+
+; allow SPI
+; In - NONE
+; Out - NONE
+SPI_MasterInit:
+; Set MOSI and SCK direction to output, all others are set to input
+	ldi temp, (1<<DD_MOSI)|(1<<DD_SCK)|(1<MemSelPin)
+	out DDR_SPI,temp
+	; Enable SPI, Master, set clock rate fck/4
+	ldi temp, (1<<SPE)|(1<<MSTR)
+	out SPCR, temp
+	cbi SPSR, SPI2X
+	ret
+
+; SPI tranmition as master
+; In - dataTemp - byte to be tranmitted
+; Out - NONE
+SPI_MasterTransmit:
+; Start transmission of data (r16)
+	out SPDR, dataTemp
+  Wait_Transmit:
+; Wait for transmission complete
+	sbis SPSR,SPIF
+	rjmp Wait_Transmit
+	ret
+
+; prepare ram for byte operation (before communication with PC)
+; In - NONE
+; Out - NONE
+RAM_Config:
+  ; select RAM for SPI operation
+	cbi MemSelPort, MemSelBit
+  ; ram preparation for byte operation mode
+	ldi dataTemp, RAM_WRSR
+	call SPI_MasterTransmit
+
+	ldi dataTemp, RAM_SB_byte_oper
+	call SPI_MasterTransmit
+
+  ; deselct ram for SPI transmition
+	sbi PORTB, MemSelBit
+	ret
+
+; UART initialization @ 9600 bps
+; In - NONE
+; Out - NONE
+UART_Init:
+  ; set baudrate
+	ldi tempBaudRateH, uart_baudrate_h
+	ldi tempBaudRateL, uart_baudrate_l
+	out UBRRH, tempBaudRateH
+	out UBRRL, tempBaudRateL
+  ; set frame format: 8data bits, 2 stop bits
+	ldi dataTemp, (1<<URSEL)|(1<<USBS)|(3<<UCSZ0)
+	out UCSRC, dataTemp
+  ; Enable reciever and transmitter
+	ldi dataTemp, (1<<RXEN)|(1<<TXEN)
+	out UCSRB, dataTemp
+	ret
+
+; UART recieve proc
+; In - NONE
+; Out - dataTemp - recieved byte
+UART_Rcv:
+	sbis UCSRA, RXC
+	rjmp UART_Rcv
+	in dataTemp, UDR
+	ret
+
+; UART send proc
+; In - dataTemp - byte to be transmitted over UART
+; Out - NONE
+UART_Snd:
+	sbis UCSRA, UDRE
+	rjmp UART_Snd
+	out UDR, dataTemp
+	ret
+
+; ------------ MAIN --------------
+MAIN:
+  ; configurations block
+  ; stack init
+	ldi temp, low(RAMEND);
+	ldi temp2, high(RAMEND);
+	out SPH, temp2;
+	out SPL, temp;
+	----- TODO -----
+
+  ; communications configuration
+	call ConfigPorts;
+	call SPI_MasterInit;
+	call RAM_Config;
+	call UART_Init;
+	sbi StatusReadyPort, StatusConfigDone;
+
+  ; communication with PC block
+  WaitDataStart:
+	call UART_Rcv;
+	cpi dataTemp, UartDataStartByte;
+	brne WaitDataStart;
+  ; Data started from PC
+	sbi StatusReadyPort, StatusUartTxRx;
+	ldi dataTemp, UartDataStartAck;
+	call UART_Snd;
+
+  ; begin communication with PC
+  ; Ndrives in
+  UartNdrivesIn:
+	call UART_Rcv;
+	mov temp, dataTemp;
+  ; Write Ndrives to SRAM
+	ldi ZH, High(SRAMoffset+NdrivesOff);
+	ldi ZL, Low(SRAMoffset+NdrivesOff);
+	st Z, dataTemp;
+	adiw ZH:ZL, NdrivesSZ;
+  ; save Ndrives to temp2
+	mov Ndrv, dataTemp;
+
+  ; Allow further communication with PC
+	ldi dataTemp, UartContByte;
+	call UART_Snd;
+
+  ; Recieving commands numbers
+	clr CurDrvNum;
+  CommNumRcv:
+	call UART_Rcv;
+	st Z, dataTemp;
+	adiw ZH:ZL, DrComNumSz;
+	inc CurDrvNum;
+	cp CurDrvNum, Ndrv;
+	brne CommNumRcv;
+  ; Recieving drives commands number is over
+
+  ; allowing further communications
+	ldi dataTemp, UartContByte;
+	call UART_Snd;
+
+  ; Now - recieving comands
+	ldi ZH, High(SRAMoffset+NdrivesOff+NdrivesSZ);
+	ldi ZL, Low(SRAMoffset+NdrivesOff+NdrivesSZ);
+	clr RAMaddrH;
+	clr RAMaddrL;
+	ldi coms_pages, MAX_NUM_COM_DRV;
+	; select RAM for SPI operation
+	cbi MemSelPort, MemSelBit
+
+	clr CurDrvNum;
+  CommandsRcv:
+	ld CurDrvComNum, Z;		; number of comands for current drive is read from SRAM
+	clr DrvComNum;			; number of comands already read fro UART
+  OneComandRcv:
+		call UART_Rcv;
+		mov temp_com, dataTemp;
+	; save dataTemp contents to RAM
+		ldi dataTemp, RAM_WRTE;
+		call SPI_MasterTransmit;
+
+		mov dataTemp, RAMaddrH;
+		call SPI_MasterTransmit;
+		mov dataTemp, RAMaddrL;
+		call SPI_MasterTransmit;
+
+		mov dataTemp, temp_com;
+		call SPI_MasterTransmit;
+
+		adiw RAMaddrH:RAMaddrL, DR_COM_SZ;
+		inc DrvComNum;
+
+		ldi dataTemp, UartContByte;
+		call UART_Snd;
+		; SINGLE command recieved
+
+		cp DrvComNum, CurDrvComNum;
+		brne OneComandRcv;
+		; commands for CurDrvNum drive recieved
+	clr RAMaddrL;
+	add RAMaddrH, coms_pages;
+
+	inc CurDrvNum;
+	cp CurDrvNum, Ndrv;
+	brne CommandsRcv;
+
+  ; now deselect ram from spi operation
+	sbi MemSelPort, MemSelBit;
+
+	cbi StatusReadyPort, StatusUartTxRx;
+
+  ; now operating on SPI
+	sbi StatusReadyPort, StatusSpiTxRx;
+	----- TODO -----
